@@ -1,6 +1,6 @@
 <div align="center">
 
-# AnyClaw
+# ZombieClaw
 
 ### Pi Agent Rust + Codex — Running Natively on Android
 
@@ -19,7 +19,7 @@
 
 <br />
 
-[Download APK](https://friuns2.github.io/openclaw-android-assistant/) ·
+[Download APK](https://github.com/babybirdprd/zombieclaw/releases/latest) ·
 [Migration Plan](documentation/MIGRATION_PI_ZEROCLAW.md) ·
 [Project Spec](PROJECT_SPEC.md)
 
@@ -64,8 +64,8 @@ The app authenticates once via OpenAI OAuth. Codex uses `codex app-server`, whil
 ## Quick Start
 
 ```bash
-git clone https://github.com/friuns2/openclaw-android-assistant.git
-cd openclaw-android-assistant
+git clone https://github.com/babybirdprd/zombieclaw.git
+cd zombieclaw
 
 npm install && npm run build
 
@@ -76,7 +76,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.codex.mobile/.MainActivity
 ```
 
-Or [download the latest APK](https://friuns2.github.io/openclaw-android-assistant/) directly.
+Or [download the latest APK](https://github.com/babybirdprd/zombieclaw/releases/latest) directly.
 
 ---
 
@@ -125,7 +125,7 @@ Or [download the latest APK](https://friuns2.github.io/openclaw-android-assistan
 
 ## Pi Core + ZeroClaw Compatibility
 
-AnyClaw now installs `pi_agent_rust` as core runtime direction and `zeroclaw` as the compatibility gateway layer. Legacy OpenClaw-specific details below are retained only for historical context during migration and are being phased out.
+ZombieClaw now installs `pi_agent_rust` as core runtime direction and `zeroclaw` as the compatibility gateway layer. Legacy OpenClaw-specific details below are retained only for historical context during migration and are being phased out.
 
 ### Build Pipeline
 

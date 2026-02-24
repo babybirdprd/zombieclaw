@@ -507,7 +507,7 @@ WEOF
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>AnyClaw Pi Runtime</title>
+              <title>ZombieClaw Pi Runtime</title>
               <style>
                 body { margin: 0; padding: 24px; font-family: "Segoe UI", sans-serif; background: #f8fafc; color: #111827; }
                 .card { max-width: 760px; margin: 0 auto; border: 1px solid #e4e4e7; border-radius: 14px; background: #fff; padding: 20px; }
@@ -519,7 +519,7 @@ WEOF
               <main class="card">
                 <h1>Pi Runtime Compatibility</h1>
                 <p>Gateway URL: <code>ws://127.0.0.1:$PI_GATEWAY_PORT</code></p>
-                <p>This page is served locally so AnyClaw can switch between Codex and Pi-compatible experiences inside one app shell.</p>
+                <p>This page is served locally so ZombieClaw can switch between Codex and Pi-compatible experiences inside one app shell.</p>
               </main>
             </body>
             </html>

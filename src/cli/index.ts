@@ -29,7 +29,7 @@ const server = createServer(app)
 server.listen(port, () => {
   const lines = [
     '',
-    'AnyClaw is running!',
+    'ZombieClaw is running!',
     '',
     `  Local:    http://localhost:${String(port)}`,
   ]

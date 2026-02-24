@@ -1,6 +1,6 @@
-# AnyClaw (Android)
+# ZombieClaw (Android)
 
-Android APK that embeds a Termux-style Linux bootstrap environment, installs pi_agent_rust + zeroclaw compatibility + Codex on first run, and presents the AnyClaw UI inside a WebView.
+Android APK that embeds a Termux-style Linux bootstrap environment, installs pi_agent_rust + zeroclaw compatibility + Codex on first run, and presents the ZombieClaw UI inside a WebView.
 
 ## Architecture
 
