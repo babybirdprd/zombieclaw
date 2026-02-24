@@ -27,6 +27,12 @@ export const LocaleContext = createContext<LocaleContextType>({
 
 export const useLocaleContext = () => useContext(LocaleContext);
 
+interface PairingStatusResponse {
+  data?: {
+    pairingRequired?: boolean;
+  };
+}
+
 // Pairing dialog component
 function PairingDialog({ onPair }: { onPair: (code: string) => Promise<void> }) {
   const [code, setCode] = useState('');
@@ -82,22 +88,58 @@ function PairingDialog({ onPair }: { onPair: (code: string) => Promise<void> }) 
 function AppContent() {
   const { isAuthenticated, pair, logout } = useAuth();
   const [locale, setLocaleState] = useState('tr');
+  const [pairingRequired, setPairingRequired] = useState<boolean | null>(null);
 
   const setAppLocale = (newLocale: string) => {
     setLocaleState(newLocale);
     setLocale(newLocale as Locale);
   };
 
+  useEffect(() => {
+    let mounted = true;
+
+    const loadPairingStatus = async () => {
+      try {
+        const response = await fetch('/pi-api/auth/status');
+        if (!response.ok) {
+          throw new Error(`Auth status request failed: ${response.status}`);
+        }
+        const payload = (await response.json()) as PairingStatusResponse;
+        if (!mounted) return;
+        setPairingRequired(payload.data?.pairingRequired !== false);
+      } catch {
+        if (!mounted) return;
+        setPairingRequired(true);
+      }
+    };
+
+    void loadPairingStatus();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Listen for 401 events to force logout
   useEffect(() => {
     const handler = () => {
-      logout();
+      if (pairingRequired) {
+        logout();
+      }
     };
     window.addEventListener('zeroclaw-unauthorized', handler);
     return () => window.removeEventListener('zeroclaw-unauthorized', handler);
-  }, [logout]);
+  }, [logout, pairingRequired]);
 
-  if (!isAuthenticated) {
+  if (pairingRequired === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (pairingRequired && !isAuthenticated) {
     return <PairingDialog onPair={pair} />;
   }
 

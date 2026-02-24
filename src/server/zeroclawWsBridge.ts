@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import { PiPairingGuard } from './piPairing.js'
 import { PiRpcProcess } from './piRpcProcess.js'
+import { shouldRequirePiPairing } from './pairingConfig.js'
 
 type WsPayload = {
   type?: string
@@ -69,7 +70,7 @@ function normalizeResultText(result: unknown): string {
 export function createZeroClawWsBridge(): ZeroClawWsBridge {
   const wss = new WebSocketServer({ noServer: true })
   const pairing = new PiPairingGuard({
-    requirePairing: process.env.PI_BRIDGE_REQUIRE_PAIRING !== '0',
+    requirePairing: shouldRequirePiPairing(),
   })
   const runtime = new PiRpcProcess()
 

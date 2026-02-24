@@ -586,13 +586,14 @@ function normalizeMessageType(rawType: string | undefined, role: string): string
 }
 
 async function refreshPiStateSummary(): Promise<void> {
-  if (!hasPiAuthToken.value) {
+  if (piRequiresPairing.value && !hasPiAuthToken.value) {
     piRuntimeSummary.value = 'Pair with Pi runtime to query state.'
     return
   }
 
   try {
-    const payload = await fetchPiState(piAuthToken.value)
+    const token = hasPiAuthToken.value ? piAuthToken.value : undefined
+    const payload = await fetchPiState(token)
     piRuntimeSummary.value = summarizePiState(payload.data)
   } catch (error) {
     piRuntimeSummary.value = getReadableError(error, 'Failed to fetch Pi state')
@@ -622,7 +623,7 @@ async function refreshPiHealth(): Promise<void> {
     ]
     piHealthSummary.value = status.join(' · ')
 
-    if (hasPiAuthToken.value) {
+    if (hasPiAuthToken.value || !piRequiresPairing.value) {
       void refreshPiStateSummary()
     } else if (piRequiresPairing.value) {
       piRuntimeSummary.value = 'Pairing required before Pi runtime commands are available.'
@@ -675,14 +676,15 @@ async function onSendPiPrompt(): Promise<void> {
   if (piPromptBusy.value) return
   const message = piPromptInput.value.trim()
   if (!message) return
-  if (!hasPiAuthToken.value) {
+  if (piRequiresPairing.value && !hasPiAuthToken.value) {
     piRuntimeSummary.value = 'Pair before sending prompts.'
     return
   }
 
   piPromptBusy.value = true
   try {
-    await promptPi(message, piAuthToken.value)
+    const token = hasPiAuthToken.value ? piAuthToken.value : undefined
+    await promptPi(message, token)
     piPromptInput.value = ''
     piRuntimeSummary.value = 'Prompt sent to Pi runtime.'
   } catch (error) {
@@ -693,9 +695,13 @@ async function onSendPiPrompt(): Promise<void> {
 }
 
 async function onAbortPiRuntime(): Promise<void> {
-  if (!hasPiAuthToken.value) return
+  if (piRequiresPairing.value && !hasPiAuthToken.value) {
+    piRuntimeSummary.value = 'Pair before aborting runtime commands.'
+    return
+  }
   try {
-    await abortPi(piAuthToken.value)
+    const token = hasPiAuthToken.value ? piAuthToken.value : undefined
+    await abortPi(token)
     piRuntimeSummary.value = 'Abort command sent.'
   } catch (error) {
     piRuntimeSummary.value = getReadableError(error, 'Failed to abort Pi runtime turn')

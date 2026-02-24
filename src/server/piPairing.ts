@@ -151,7 +151,7 @@ export class PiPairingGuard {
     await this.load()
     return {
       pairingRequired: this.requirePairing,
-      paired: this.tokenHashes.size > 0,
+      paired: !this.requirePairing || this.tokenHashes.size > 0,
       pairingCode: this.requirePairing ? this.pairingCode : null,
     }
   }

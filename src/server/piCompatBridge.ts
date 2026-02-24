@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { createConnection } from 'node:net'
 import { PiPairingGuard } from './piPairing.js'
 import { PiRpcProcess, type PiRuntimeNotification } from './piRpcProcess.js'
+import { shouldRequirePiPairing } from './pairingConfig.js'
 
 const prefixBin = process.env.PREFIX ? join(process.env.PREFIX, 'bin') : ''
 const shellPath = prefixBin ? join(prefixBin, 'sh') : '/bin/sh'
@@ -426,7 +427,7 @@ function estimateTokens(text: string): number {
 export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
   const runtime = new PiRpcProcess()
   const pairing = new PiPairingGuard({
-    requirePairing: process.env.PI_BRIDGE_REQUIRE_PAIRING !== '0',
+    requirePairing: shouldRequirePiPairing(),
   })
   const connections = new Set<ServerResponse>()
   const eventUnsubscribeByConnection = new Map<ServerResponse, () => void>()
