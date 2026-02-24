@@ -88,6 +88,26 @@ export interface CliTool {
   category: string;
 }
 
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  description: string;
+  providerId: string;
+  api: string;
+  baseUrl: string;
+  modelId: string;
+  apiKeyEnv: string;
+}
+
+export interface ProviderConfigEntry {
+  providerId: string;
+  api: string | null;
+  baseUrl: string | null;
+  apiKeyMasked: string | null;
+  authHeader: boolean | null;
+  models: string[];
+}
+
 export interface SSEEvent {
   type: string;
   timestamp?: string;

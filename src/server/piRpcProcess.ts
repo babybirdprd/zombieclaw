@@ -63,6 +63,21 @@ function extractErrorMessage(value: unknown, fallback: string): string {
   return fallback
 }
 
+async function shellCommandSucceeds(command: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawn(shellPath, ['-c', command], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+
+    proc.on('exit', (code) => {
+      resolve(code === 0)
+    })
+    proc.on('error', () => {
+      resolve(false)
+    })
+  })
+}
+
 export class PiRpcProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private readBuffer = ''
@@ -77,6 +92,7 @@ export class PiRpcProcess {
   private lastEventAtIso: string | null = null
   private lastError: string | null = null
   private status: PiRuntimeHealth['status'] = 'stopped'
+  private suppressNextExitError = false
 
   private emitNotification(notification: PiRuntimeNotification): void {
     this.notifications.emit('notification', notification)
@@ -192,7 +208,13 @@ export class PiRpcProcess {
       return this.startPromise
     }
 
-    const startPromise = new Promise<void>((resolve, reject) => {
+    const startPromise = new Promise<void>(async (resolve, reject) => {
+      const hasPiBinary = await shellCommandSucceeds('command -v pi >/dev/null 2>&1')
+      if (!hasPiBinary) {
+        reject(new Error('Pi runtime binary `pi` is missing. Install pi_agent_rust first, then retry.'))
+        return
+      }
+
       this.setStatus('starting')
 
       const proc = spawn(shellPath, ['-c', 'exec pi --mode rpc'], {
@@ -252,14 +274,16 @@ export class PiRpcProcess {
       proc.on('exit', (_code, signal) => {
         this.process = null
         this.readBuffer = ''
+        const suppressed = this.suppressNextExitError
+        this.suppressNextExitError = false
         const message = signal
           ? `Pi runtime stopped by signal ${signal}`
           : 'Pi runtime exited'
-        if (!this.disposed) {
+        if (!this.disposed && !suppressed) {
           this.lastError = message
         }
         this.failAllPending(new Error(message))
-        if (this.disposed) {
+        if (this.disposed || suppressed) {
           this.setStatus('stopped')
           return
         }
@@ -276,6 +300,72 @@ export class PiRpcProcess {
 
   async ensureStarted(): Promise<void> {
     await this.startProcess()
+  }
+
+  async restart(): Promise<void> {
+    if (this.disposed) {
+      throw new Error('Pi runtime has been disposed')
+    }
+
+    if (this.startPromise) {
+      try {
+        await this.startPromise
+      } catch {
+        // Ignore startup failures here; restart will try again.
+      }
+    }
+
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
+
+    const proc = this.process
+    if (proc) {
+      this.suppressNextExitError = true
+      this.process = null
+      this.readBuffer = ''
+      this.failAllPending(new Error('Pi runtime restarting'))
+      this.setStatus('stopped')
+
+      await new Promise<void>((resolve) => {
+        let settled = false
+        const finish = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+
+        proc.once('exit', () => {
+          finish()
+        })
+
+        try {
+          proc.stdin.end()
+        } catch {
+          // ignore shutdown errors
+        }
+        try {
+          proc.kill('SIGTERM')
+        } catch {
+          // ignore shutdown errors
+        }
+
+        const forceKillTimer = setTimeout(() => {
+          if (!proc.killed) {
+            try {
+              proc.kill('SIGKILL')
+            } catch {
+              // ignore shutdown errors
+            }
+          }
+          finish()
+        }, 1500)
+        forceKillTimer.unref()
+      })
+    }
+
+    await this.ensureStarted()
   }
 
   async call(command: string, params: Record<string, unknown> = {}, timeoutMs = 60000): Promise<unknown> {

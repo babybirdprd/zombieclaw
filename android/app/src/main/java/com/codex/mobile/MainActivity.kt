@@ -176,7 +176,7 @@ class MainActivity : AppCompatActivity() {
             updateStatus("Installing pi_agent_rust core…", "Compiling from source if needed")
             val piCoreOk = serverManager.installPiCore { msg -> updateDetail(msg) }
             if (!piCoreOk) {
-                Log.w(TAG, "pi_agent_rust install failed — continuing with compatibility mode only")
+                throw RuntimeException("Failed to install pi_agent_rust core. Retry setup with a stable network connection.")
             } else {
                 updateStatus("pi_agent_rust core installed")
             }

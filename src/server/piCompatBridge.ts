@@ -5,9 +5,17 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createConnection } from 'node:net'
-import { PiPairingGuard } from './piPairing.js'
-import { PiRpcProcess, type PiRuntimeNotification } from './piRpcProcess.js'
-import { shouldRequirePiPairing } from './pairingConfig.js'
+import type { PiPairingGuard } from './piPairing.js'
+import type { PiRpcProcess, PiRuntimeNotification } from './piRpcProcess.js'
+import { getPiBridgeContext } from './piBridgeContext.js'
+import {
+  getPiModelsConfigPath,
+  getPiProviderPresets,
+  listPiProviderConfigs,
+  loadPiModelsConfig,
+  savePiModelsConfig,
+  upsertPiProviderConfig,
+} from './piProviderConfig.js'
 
 const prefixBin = process.env.PREFIX ? join(process.env.PREFIX, 'bin') : ''
 const shellPath = prefixBin ? join(prefixBin, 'sh') : '/bin/sh'
@@ -311,6 +319,68 @@ function extractBearerToken(req: IncomingMessage, url: URL): string {
   return url.searchParams.get('token')?.trim() ?? ''
 }
 
+type ProviderConfigRequestPayload = {
+  providerId: string
+  modelId?: string
+  modelName?: string
+  api?: string
+  baseUrl?: string
+  apiKey?: string
+  authHeader?: boolean
+  headers?: Record<string, string>
+  contextWindow?: number
+  maxTokens?: number
+}
+
+function parseProviderConfigPayload(value: unknown): ProviderConfigRequestPayload {
+  const payload = asRecord(value)
+  const providerId = typeof payload?.providerId === 'string' ? payload.providerId.trim().toLowerCase() : ''
+  if (!providerId) {
+    throw new Error('providerId is required')
+  }
+
+  const parseOptionalString = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== 'string') return undefined
+    const trimmed = candidate.trim()
+    return trimmed.length > 0 ? trimmed : undefined
+  }
+
+  const parseOptionalPositiveNumber = (candidate: unknown): number | undefined => {
+    if (typeof candidate !== 'number' || Number.isNaN(candidate) || !Number.isFinite(candidate) || candidate <= 0) {
+      return undefined
+    }
+    return Math.floor(candidate)
+  }
+
+  let headers: Record<string, string> | undefined
+  if (payload?.headers && typeof payload.headers === 'object' && !Array.isArray(payload.headers)) {
+    const nextHeaders = Object.fromEntries(
+      Object.entries(payload.headers)
+        .filter((entry): entry is [string, string] =>
+          typeof entry[0] === 'string' && typeof entry[1] === 'string',
+        )
+        .map(([key, headerValue]) => [key.trim(), headerValue.trim()] as const)
+        .filter(([key, headerValue]) => key.length > 0 && headerValue.length > 0),
+    )
+    if (Object.keys(nextHeaders).length > 0) {
+      headers = nextHeaders
+    }
+  }
+
+  return {
+    providerId,
+    modelId: parseOptionalString(payload?.modelId),
+    modelName: parseOptionalString(payload?.modelName),
+    api: parseOptionalString(payload?.api),
+    baseUrl: parseOptionalString(payload?.baseUrl),
+    apiKey: parseOptionalString(payload?.apiKey),
+    authHeader: typeof payload?.authHeader === 'boolean' ? payload.authHeader : undefined,
+    headers,
+    contextWindow: parseOptionalPositiveNumber(payload?.contextWindow),
+    maxTokens: parseOptionalPositiveNumber(payload?.maxTokens),
+  }
+}
+
 async function readPiCompatStatus(runtime: PiRpcProcess, pairing: PiPairingGuard): Promise<PiCompatStatus> {
   const [piCoreInstalled, zeroClawCompatInstalled] = await Promise.all([
     commandSucceeds('command -v pi >/dev/null 2>&1'),
@@ -401,6 +471,55 @@ function buildCompatStatusPayload(status: PiCompatStatus) {
   }
 }
 
+type RuntimeModelSummary = {
+  provider: string | null
+  model: string | null
+}
+
+function parseRuntimeModelSummary(payload: unknown): RuntimeModelSummary {
+  const record = asRecord(payload)
+  if (!record) {
+    return { provider: null, model: null }
+  }
+
+  const provider = typeof record.provider === 'string' && record.provider.trim().length > 0
+    ? record.provider.trim()
+    : null
+  const model = typeof record.model === 'string' && record.model.trim().length > 0
+    ? record.model.trim()
+    : null
+  return { provider, model }
+}
+
+async function readRuntimeModelSummary(runtime: PiRpcProcess): Promise<RuntimeModelSummary> {
+  try {
+    const payload = await runtime.call('get_state', {}, 12000)
+    return parseRuntimeModelSummary(payload)
+  } catch {
+    return { provider: null, model: null }
+  }
+}
+
+function buildCompatStatusPayloadWithRuntime(status: PiCompatStatus, runtimeModel: RuntimeModelSummary) {
+  const health = buildCompatHealthSnapshot(status)
+  return {
+    provider: runtimeModel.provider ?? 'pi_agent_rust',
+    model: runtimeModel.model ?? compatModelId,
+    temperature: 0.2,
+    uptime_seconds: health.uptime_seconds,
+    gateway_port: status.gateway.port,
+    locale: 'en',
+    memory_backend: 'sqlite',
+    paired: status.auth.paired,
+    channels: {
+      webhook: true,
+      mobile: true,
+      rpc: true,
+    },
+    health,
+  }
+}
+
 function resultAsText(result: unknown): string {
   if (typeof result === 'string') {
     return result
@@ -425,10 +544,7 @@ function estimateTokens(text: string): number {
 }
 
 export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
-  const runtime = new PiRpcProcess()
-  const pairing = new PiPairingGuard({
-    requirePairing: shouldRequirePiPairing(),
-  })
+  const { runtime, pairing } = getPiBridgeContext()
   const connections = new Set<ServerResponse>()
   const eventUnsubscribeByConnection = new Map<ServerResponse, () => void>()
   const closeByConnection = new Map<ServerResponse, () => void>()
@@ -621,10 +737,11 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
         if (res.writableEnded || res.destroyed) return
         const payload = await readPiCompatStatus(runtime, pairing)
         if (zeroApiShape) {
+          const runtimeModel = await readRuntimeModelSummary(runtime)
           res.write(`data: ${JSON.stringify({
             type: 'status',
             timestamp: new Date().toISOString(),
-            data: buildCompatStatusPayload(payload),
+            data: buildCompatStatusPayloadWithRuntime(payload, runtimeModel),
           })}\n\n`)
           return
         }
@@ -698,6 +815,7 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       '/pi-api/webhook',
       '/api/status',
       '/api/config',
+      '/api/provider-config',
       '/api/tools',
       '/api/cron',
       '/api/integrations',
@@ -723,7 +841,8 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
       const status = await readPiCompatStatus(runtime, pairing)
-      setJson(res, 200, buildCompatStatusPayload(status))
+      const runtimeModel = await readRuntimeModelSummary(runtime)
+      setJson(res, 200, buildCompatStatusPayloadWithRuntime(status, runtimeModel))
       return
     }
 
@@ -745,12 +864,162 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       return
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/provider-config') {
+      const modelsConfig = await loadPiModelsConfig()
+      setJson(res, 200, {
+        path: getPiModelsConfigPath(),
+        presets: getPiProviderPresets(),
+        providers: listPiProviderConfigs(modelsConfig),
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/provider-config') {
+      let body: unknown
+      try {
+        body = await readJsonBody(req)
+      } catch (error) {
+        setJson(res, 400, { error: getErrorMessage(error, 'Invalid JSON body') })
+        return
+      }
+
+      let payload: ProviderConfigRequestPayload
+      try {
+        payload = parseProviderConfigPayload(body)
+      } catch (error) {
+        setJson(res, 400, { error: getErrorMessage(error, 'Invalid provider configuration payload') })
+        return
+      }
+
+      const modelsConfig = await loadPiModelsConfig()
+      const updatedConfig = upsertPiProviderConfig(modelsConfig, payload)
+      await savePiModelsConfig(updatedConfig)
+
+      let restartMessage: string | null = null
+      try {
+        await runtime.restart()
+      } catch (error) {
+        const message = getErrorMessage(error, 'Failed to restart Pi runtime after config update')
+        setJson(res, 502, {
+          error: message,
+          providerId: payload.providerId,
+          modelId: payload.modelId ?? null,
+        })
+        return
+      }
+
+      if (payload.modelId) {
+        try {
+          await callPiCommand('set_model', {
+            provider: payload.providerId,
+            modelId: payload.modelId,
+          })
+        } catch (error) {
+          restartMessage = getErrorMessage(error, 'Provider config saved, but model activation failed')
+        }
+      }
+
+      setJson(res, 200, {
+        status: 'ok',
+        providerId: payload.providerId,
+        modelId: payload.modelId ?? null,
+        runtimeRestarted: true,
+        warning: restartMessage,
+      })
+      return
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/tools') {
       setJson(res, 200, {
         tools: [
           {
+            name: 'read',
+            description: 'Read file contents, including images supported by pi runtime',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                offset: { type: 'number' },
+                limit: { type: 'number' },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'write',
+            description: 'Create or overwrite files',
+            parameters: {
+              type: 'object',
+              properties: {},
+            },
+          },
+          {
+            name: 'edit',
+            description: 'Surgical in-file string replacement',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                old: { type: 'string' },
+                new: { type: 'string' },
+              },
+              required: ['path', 'old', 'new'],
+            },
+          },
+          {
+            name: 'bash',
+            description: 'Run shell commands with timeout and process cleanup',
+            parameters: {
+              type: 'object',
+              properties: {
+                command: { type: 'string' },
+                timeout: { type: 'number' },
+              },
+              required: ['command'],
+            },
+          },
+          {
+            name: 'grep',
+            description: 'Search files with regex and context',
+            parameters: {
+              type: 'object',
+              properties: {
+                pattern: { type: 'string' },
+                path: { type: 'string' },
+                context: { type: 'number' },
+                limit: { type: 'number' },
+              },
+              required: ['pattern'],
+            },
+          },
+          {
+            name: 'find',
+            description: 'Discover files by glob patterns',
+            parameters: {
+              type: 'object',
+              properties: {
+                pattern: { type: 'string' },
+                path: { type: 'string' },
+                limit: { type: 'number' },
+              },
+              required: ['pattern'],
+            },
+          },
+          {
+            name: 'ls',
+            description: 'List directory contents',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                limit: { type: 'number' },
+              },
+              required: ['path'],
+            },
+          },
+          {
             name: 'prompt',
-            description: 'Send a prompt to pi_agent_rust runtime',
+            description: 'Send a prompt through pi runtime RPC',
             parameters: {
               type: 'object',
               properties: {
@@ -760,16 +1029,8 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
             },
           },
           {
-            name: 'abort',
-            description: 'Abort active runtime generation',
-            parameters: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
             name: 'set_model',
-            description: 'Switch runtime provider/model',
+            description: 'Switch active provider/model in pi runtime',
             parameters: {
               type: 'object',
               properties: {
@@ -777,6 +1038,14 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
                 modelId: { type: 'string' },
               },
               required: ['provider', 'modelId'],
+            },
+          },
+          {
+            name: 'abort',
+            description: 'Abort active runtime generation',
+            parameters: {
+              type: 'object',
+              properties: {},
             },
           },
         ],

@@ -8,6 +8,8 @@ import type {
   CostSummary,
   CliTool,
   HealthSnapshot,
+  ProviderPreset,
+  ProviderConfigEntry,
 } from '../types/api';
 import { clearToken, getToken, setToken } from './auth';
 
@@ -122,6 +124,58 @@ export function putConfig(toml: string): Promise<void> {
     headers: { 'Content-Type': 'application/toml' },
     body: toml,
   });
+}
+
+export function getProviderConfig(): Promise<{
+  path: string;
+  presets: ProviderPreset[];
+  providers: ProviderConfigEntry[];
+}> {
+  return apiFetch<{
+    path?: string;
+    presets?: ProviderPreset[];
+    providers?: ProviderConfigEntry[];
+  }>('/api/provider-config').then((payload) => ({
+    path: payload.path ?? '',
+    presets: Array.isArray(payload.presets) ? payload.presets : [],
+    providers: Array.isArray(payload.providers) ? payload.providers : [],
+  }));
+}
+
+export function saveProviderConfig(input: {
+  providerId: string;
+  modelId?: string;
+  modelName?: string;
+  api?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  authHeader?: boolean;
+  headers?: Record<string, string>;
+}): Promise<{
+  status: string;
+  providerId: string;
+  modelId: string | null;
+  runtimeRestarted: boolean;
+  warning: string | null;
+}> {
+  return apiFetch<{
+    status?: string;
+    providerId?: string;
+    modelId?: string | null;
+    runtimeRestarted?: boolean;
+    warning?: string | null;
+  }>('/api/provider-config', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }).then((payload) => ({
+    status: payload.status ?? 'ok',
+    providerId: payload.providerId ?? input.providerId,
+    modelId: payload.modelId ?? null,
+    runtimeRestarted: payload.runtimeRestarted === true,
+    warning: payload.warning ?? null,
+  }));
 }
 
 // ---------------------------------------------------------------------------

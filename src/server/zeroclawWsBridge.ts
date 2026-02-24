@@ -1,9 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
-import { PiPairingGuard } from './piPairing.js'
-import { PiRpcProcess } from './piRpcProcess.js'
-import { shouldRequirePiPairing } from './pairingConfig.js'
+import { getPiBridgeContext } from './piBridgeContext.js'
 
 type WsPayload = {
   type?: string
@@ -69,10 +67,7 @@ function normalizeResultText(result: unknown): string {
 
 export function createZeroClawWsBridge(): ZeroClawWsBridge {
   const wss = new WebSocketServer({ noServer: true })
-  const pairing = new PiPairingGuard({
-    requirePairing: shouldRequirePiPairing(),
-  })
-  const runtime = new PiRpcProcess()
+  const { pairing, runtime } = getPiBridgeContext()
 
   wss.on('connection', (socket, request: IncomingMessage) => {
     const url = new URL(request.url ?? '/', 'http://localhost')
@@ -126,9 +121,12 @@ export function createZeroClawWsBridge(): ZeroClawWsBridge {
             full_response: normalizeResultText(result),
           }))
         } catch (error) {
+          const runtimeHealth = runtime.health()
+          const baseMessage = getErrorMessage(error, 'Runtime prompt failed')
+          const detail = runtimeHealth.lastError?.trim() ?? ''
           socket.send(JSON.stringify({
             type: 'error',
-            message: getErrorMessage(error, 'Runtime prompt failed'),
+            message: detail.length > 0 ? `${baseMessage} (${detail})` : baseMessage,
           }))
         }
       })()

@@ -360,8 +360,14 @@ WEOF
               echo "curl is required to install pi_agent_rust";
               exit 1;
             fi &&
-            curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/pi_agent_rust/main/install.sh" \
-              | bash -s -- --yes --from-source --no-agent-skills --no-completions 2>&1 &&
+            (
+              curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/pi_agent_rust/main/install.sh" \
+                | bash -s -- --yes --no-agent-skills --no-completions 2>&1
+            ) || (
+              echo "binary install failed; retrying with source build" &&
+              curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/pi_agent_rust/main/install.sh" \
+                | bash -s -- --yes --from-source --no-agent-skills --no-completions 2>&1
+            ) &&
             mkdir -p "$prefix/bin" &&
             if [ -x "${'$'}HOME/.local/bin/pi" ]; then
               ln -sf "${'$'}HOME/.local/bin/pi" "$prefix/bin/pi";
