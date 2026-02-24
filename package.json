@@ -28,11 +28,14 @@
   },
   "files": [
     "dist/",
+    "dist-zeroclaw/",
     "dist-cli/"
   ],
   "scripts": {
     "dev": "vite",
-    "build:frontend": "vue-tsc --noEmit && vite build",
+    "build:frontend:codex": "vue-tsc --noEmit && vite build --base /apps/codex/ --outDir dist",
+    "build:frontend:zeroclaw": "npm --prefix vendor/zeroclaw-web ci --ignore-scripts && npm --prefix vendor/zeroclaw-web run build",
+    "build:frontend": "npm run build:frontend:codex && npm run build:frontend:zeroclaw && node scripts/sync-zeroclaw-dist.mjs",
     "build:cli": "tsup",
     "build": "npm run build:frontend && npm run build:cli",
     "preview": "vite preview",
@@ -42,12 +45,14 @@
     "commander": "^13.1.0",
     "express": "^5.1.0",
     "marked": "^17.0.3",
-    "shiki": "^3.22.0"
+    "shiki": "^3.22.0",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
     "@types/express": "^5.0.0",
     "@types/node": "^22.13.2",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "playwright": "^1.58.2",
     "tailwindcss": "^4.1.18",

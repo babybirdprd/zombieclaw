@@ -70,7 +70,7 @@
             :class="{ 'app-drawer-item--active': isPiRoute }"
             @click="openPiApp"
           >
-            Pi Runtime
+            ZombieClaw UI
           </button>
         </section>
       </section>
@@ -380,8 +380,7 @@ function openCodexApp(): void {
 }
 
 function openPiApp(): void {
-  if (isPiRoute.value) return
-  void router.push({ name: 'app-pi' })
+  window.location.href = '/apps/zeroclaw'
 }
 
 function onSelectThread(threadId: string): void {

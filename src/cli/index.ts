@@ -23,8 +23,14 @@ if (opts.password === false) {
   password = generatePassword()
 }
 
-const { app, dispose } = createApp({ password })
+const { app, dispose, handleUpgrade } = createApp({ password })
 const server = createServer(app)
+server.on('upgrade', (req, socket, head) => {
+  const handled = handleUpgrade(req, socket, head)
+  if (!handled) {
+    socket.destroy()
+  }
+})
 
 server.listen(port, () => {
   const lines = [

@@ -20,7 +20,7 @@ Pinned upstream commit SHAs:
 ## Runtime Contract Kept Stable
 - Compatibility gateway port: `18789`
 - Compatibility control UI port: `19001`
-- AnyClaw web server port: `18923`
+- ZombieClaw app server port: `18923`
 
 ## Android Startup Changes
 - Replaced OpenClaw install/config/start flow with:

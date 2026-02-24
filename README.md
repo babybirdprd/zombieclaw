@@ -25,7 +25,7 @@
 
 <br />
 
-<img src="screenshots/screenshot.png" width="280" alt="Pi Runtime Dashboard" /> &nbsp;&nbsp; <img src="screenshots/screenshot2.png" width="280" alt="Codex Coding Agent" />
+<img src="screenshots/screenshot.png" width="280" alt="ZeroClaw Mobile UI" /> &nbsp;&nbsp; <img src="screenshots/screenshot2.png" width="280" alt="Codex Coding Agent" />
 
 </div>
 
@@ -49,8 +49,8 @@ The app authenticates once via OpenAI OAuth. Codex uses `codex app-server`, whil
 
 | | Feature | Description |
 |---|---|---|
-| | **App Drawer** | In-app switching between Codex and Pi runtime surfaces (single WebView shell) |
-| | **Pi Runtime Surface** | Compatibility dashboard backed by Pi core + zeroclaw gateway layer |
+| | **App Drawer** | In-app switching between ZeroClaw and Codex surfaces (single WebView shell) |
+| | **ZeroClaw Surface** | Mobile-first ZeroClaw web UI backed by Pi core compatibility endpoints |
 | | **Codex Chat** | Conversational coding agent with streaming responses and reasoning visibility |
 | | **Execute Commands** | Both agents run shell commands in the embedded Linux environment |
 | | **Multi-Thread Sessions** | Parallel conversations, each with its own context and working directory |
@@ -117,39 +117,21 @@ Or [download the latest APK](https://github.com/babybirdprd/zombieclaw/releases/
 | Port | Service | Purpose |
 |------|---------|---------|
 | 18789 | Pi Compat Gateway | WebSocket compatibility control plane |
-| 18923 | codex-web-local | HTTP server with Vue.js UI (WebView target) |
+| 18923 | ZombieClaw app server | HTTP server with dual app shell (`/apps/zeroclaw` + `/apps/codex`) |
 | 18924 | CONNECT Proxy | DNS/TLS bridge for musl-linked Codex binary |
-| 19001 | Pi Control UI Server | Static file server for Pi compatibility dashboard |
 
 ---
 
 ## Pi Core + ZeroClaw Compatibility
 
-ZombieClaw now installs `pi_agent_rust` as core runtime direction and `zeroclaw` as the compatibility gateway layer. Legacy OpenClaw-specific details below are retained only for historical context during migration and are being phased out.
+ZombieClaw installs:
 
-### Build Pipeline
+1. `pi_agent_rust` as the runtime core
+2. `zeroclaw` as compatibility/runtime helper binary
+3. a mobile-first ZeroClaw web UI served at `/apps/zeroclaw`
+4. Codex UI served at `/apps/codex`
 
-1. **Build dependencies** — Downloads ~20 Termux packages (clang, cmake, make, lld, NDK sysroot, libllvm, etc.)
-2. **Fixes** — Rewrites git-core shebangs, binary-patches `make`/`cmake` to replace hardcoded Termux shell paths with `/system/bin/sh`, creates stub headers (`spawn.h`, `android/api-level.h`, `renameat2_shim.h`)
-3. **npm install** — `npm install -g --ignore-scripts openclaw@latest` (689 packages, skip native builds)
-4. **koffi build** — Builds the native FFI module separately with `CC=clang CXX=clang++ LDFLAGS="-fuse-ld=lld"`
-5. **Path patching** — Rewrites `/tmp`, `/bin/sh`, `/bin/bash`, `/usr/bin/env` in all JS files to `$PREFIX/...`
-
-### Auth Flow
-
-Authentication is automatic from the existing Codex OAuth login:
-
-- `configureOpenClawAuth()` writes `openclaw.json` with gateway token auth + `dangerouslyDisableDeviceAuth`
-- The Codex `access_token` from `~/.codex/auth.json` is copied into `auth-profiles.json` as an `openai-codex:codex-cli` profile with `type: "token"`
-- OpenClaw model is set to `openai-codex/gpt-5.3-codex` — uses the same OpenAI account, no separate API key needed
-- Auth profiles are written to both global (`~/.openclaw/`) and agent-specific (`~/.openclaw/agents/main/agent/`) directories
-
-### Android Compatibility
-
-The `bionic-compat.js` shim (loaded via `NODE_OPTIONS="-r ..."`) patches:
-- `process.platform` — returns `"linux"` instead of `"android"`
-- `os.cpus()` — returns a valid CPU array (Android's `/proc/cpuinfo` format differs)
-- `os.networkInterfaces()` — handles Android's interface naming
+Both surfaces are available through the in-app App Drawer.
 
 ---
 
@@ -181,15 +163,15 @@ Android 10+ enforces SELinux W^X (Write XOR Execute) policies. We use `targetSdk
 4. Node.js installation (`apt-get download` + `dpkg-deb`)
 5. Python installation
 6. `bionic-compat.js` extraction
-7. OpenClaw build deps + install + koffi build + path patching
+7. pi_agent_rust + zeroclaw compatibility install
 8. Codex CLI + native platform binary installation
 9. Full-access config (`approval_policy = "never"`)
 10. CONNECT proxy startup
 11. OAuth login (`codex login` via browser)
 12. Health check (`codex exec "say hi"`)
-13. OpenClaw auth config + gateway + Control UI server
-14. codex-web-local server startup
-15. WebView loads `http://127.0.0.1:18923/`
+13. Pi compatibility gateway startup
+14. ZombieClaw app server startup
+15. WebView loads `http://127.0.0.1:18923/apps/zeroclaw`
 
 ---
 
@@ -206,7 +188,7 @@ android/
 │   └── java/com/codex/mobile/
 │       ├── BootstrapInstaller.kt    # Linux environment setup
 │       ├── CodexForegroundService.kt # Background persistence
-│       ├── CodexServerManager.kt    # Install, auth, proxy, OpenClaw, server
+│       ├── CodexServerManager.kt    # Install, auth, proxy, pi/zeroclaw runtime, server
 │       └── MainActivity.kt         # WebView + setup orchestration
 ├── scripts/
 │   ├── download-bootstrap.sh        # Fetch Termux bootstrap
@@ -226,7 +208,7 @@ src/                                  # codex-web-local (TypeScript + Vue)
 - **Android 7.0+** (API 24) — ARM64 device
 - **Internet connection** — for first-run setup + API calls
 - **OpenAI account** — authenticated via OAuth browser flow
-- **~500MB storage** — for Linux environment + Node.js + Codex + OpenClaw + build tools
+- **~500MB storage** — for Linux environment + Node.js + Codex + pi/zeroclaw runtime + build tools
 
 ---
 
@@ -234,7 +216,7 @@ src/                                  # codex-web-local (TypeScript + Vue)
 
 | Layer | Technology | Version |
 |---|---|---|
-| AI Gateway | OpenClaw | 2026.2.21-2 |
+| AI Gateway | ZeroClaw compat layer | current |
 | AI Agent | OpenAI Codex CLI | 0.104.0 |
 | Model | gpt-5.3-codex (via Codex OAuth) | - |
 | Runtime | Node.js (via Termux) | 24.13.0 |
@@ -252,7 +234,7 @@ src/                                  # codex-web-local (TypeScript + Vue)
 |---|---|
 | App crashes on launch | Check `adb logcat \| grep CodexServerManager` |
 | "Permission denied" executing binaries | Ensure `targetSdk = 28` in `build.gradle.kts` |
-| OpenClaw gateway fails to start | Check `~/.openclaw/openclaw.json` config and auth-profiles |
+| ZeroClaw compat gateway fails to start | Check runtime install logs and `zeroclaw` binary availability |
 | koffi build fails | Verify clang/cmake/make are installed and binary-patched |
 | "No address associated with hostname" | Check internet; CONNECT proxy may not be running |
 | Login page doesn't open | Ensure a default browser is set on the device |
@@ -262,9 +244,9 @@ src/                                  # codex-web-local (TypeScript + Vue)
 
 ## Credits
 
-- [OpenClaw](https://openclaw.ai) — Personal AI assistant by Peter Steinberger and community
+- [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) — Rust runtime and web UI reference
 - [OpenAI Codex CLI](https://github.com/openai/codex) — Terminal-based coding agent
-- [AidanPark/openclaw-android](https://github.com/AidanPark/openclaw-android) — Android patches and bionic-compat.js
+- [AidanPark/openclaw-android](https://github.com/AidanPark/openclaw-android) — Android bootstrap compatibility references
 - [Termux](https://termux.dev) — Linux environment bootstrap for Android
 
 ---
@@ -273,6 +255,6 @@ src/                                  # codex-web-local (TypeScript + Vue)
 
 **Two AI agents. One APK. Your pocket.**
 
-[Download APK](https://friuns2.github.io/openclaw-android-assistant/) · [OpenClaw Docs](https://docs.openclaw.ai) · [Project Spec](PROJECT_SPEC.md)
+[Download APK](https://github.com/babybirdprd/zombieclaw/releases/latest) · [ZeroClaw Upstream](https://github.com/zeroclaw-labs/zeroclaw) · [Project Spec](PROJECT_SPEC.md)
 
 </div>

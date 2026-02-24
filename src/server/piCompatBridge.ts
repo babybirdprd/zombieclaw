@@ -1,12 +1,93 @@
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { createConnection } from 'node:net'
 import { PiPairingGuard } from './piPairing.js'
 import { PiRpcProcess, type PiRuntimeNotification } from './piRpcProcess.js'
 
 const prefixBin = process.env.PREFIX ? join(process.env.PREFIX, 'bin') : ''
 const shellPath = prefixBin ? join(prefixBin, 'sh') : '/bin/sh'
+const compatStatePath = join(homedir(), '.zombieclaw', 'zeroclaw-compat-state.json')
+const compatModelId = 'pi/default'
+
+type CompatCronJob = {
+  id: string
+  name: string | null
+  command: string
+  schedule: string
+  next_run: string
+  last_run: string | null
+  last_status: string | null
+  enabled: boolean
+}
+
+type CompatMemoryEntry = {
+  id: string
+  key: string
+  content: string
+  category: string
+  timestamp: string
+  session_id: string | null
+  score: number | null
+}
+
+type CompatCostSummary = {
+  session_cost_usd: number
+  daily_cost_usd: number
+  monthly_cost_usd: number
+  total_tokens: number
+  request_count: number
+  by_model: Record<string, {
+    model: string
+    cost_usd: number
+    total_tokens: number
+    request_count: number
+  }>
+}
+
+type CompatState = {
+  version: 1
+  configToml: string
+  cronJobs: CompatCronJob[]
+  memoryEntries: CompatMemoryEntry[]
+  cost: CompatCostSummary
+}
+
+function defaultCompatState(): CompatState {
+  return {
+    version: 1,
+    configToml: [
+      '# ZombieClaw compatibility config',
+      '[runtime]',
+      'provider = "pi_agent_rust"',
+      `model = "${compatModelId}"`,
+      '[gateway]',
+      'host = "127.0.0.1"',
+      'port = 18789',
+      '',
+    ].join('\n'),
+    cronJobs: [],
+    memoryEntries: [],
+    cost: {
+      session_cost_usd: 0,
+      daily_cost_usd: 0,
+      monthly_cost_usd: 0,
+      total_tokens: 0,
+      request_count: 0,
+      by_model: {
+        [compatModelId]: {
+          model: compatModelId,
+          cost_usd: 0,
+          total_tokens: 0,
+          request_count: 0,
+        },
+      },
+    },
+  }
+}
 
 type PiCompatStatus = {
   mode: 'pi_agent_rust_core'
@@ -93,6 +174,26 @@ async function commandSucceeds(command: string): Promise<boolean> {
   })
 }
 
+async function commandOutput(command: string): Promise<string> {
+  return new Promise((resolve) => {
+    const proc = spawn(shellPath, ['-c', command], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+
+    let output = ''
+    proc.stdout.setEncoding('utf8')
+    proc.stdout.on('data', (chunk: string) => {
+      output += chunk
+    })
+    proc.on('exit', () => {
+      resolve(output.trim())
+    })
+    proc.on('error', () => {
+      resolve('')
+    })
+  })
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Uint8Array[] = []
   for await (const chunk of req) {
@@ -104,6 +205,64 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   if (raw.length === 0) return null
 
   return JSON.parse(raw) as unknown
+}
+
+async function readTextBody(req: IncomingMessage): Promise<string> {
+  const chunks: Uint8Array[] = []
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  }
+  if (chunks.length === 0) return ''
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+async function loadCompatState(): Promise<CompatState> {
+  try {
+    const raw = await readFile(compatStatePath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    const record = asRecord(parsed)
+    if (!record) return defaultCompatState()
+
+    const fallback = defaultCompatState()
+    const cronJobs = Array.isArray(record.cronJobs)
+      ? record.cronJobs.filter((value): value is CompatCronJob => {
+        const row = asRecord(value)
+        return Boolean(row && typeof row.id === 'string' && typeof row.command === 'string')
+      })
+      : fallback.cronJobs
+    const memoryEntries = Array.isArray(record.memoryEntries)
+      ? record.memoryEntries.filter((value): value is CompatMemoryEntry => {
+        const row = asRecord(value)
+        return Boolean(row && typeof row.id === 'string' && typeof row.key === 'string')
+      })
+      : fallback.memoryEntries
+    const costRecord = asRecord(record.cost)
+    const cost = costRecord
+      ? {
+        session_cost_usd: Number(costRecord.session_cost_usd ?? 0),
+        daily_cost_usd: Number(costRecord.daily_cost_usd ?? 0),
+        monthly_cost_usd: Number(costRecord.monthly_cost_usd ?? 0),
+        total_tokens: Number(costRecord.total_tokens ?? 0),
+        request_count: Number(costRecord.request_count ?? 0),
+        by_model: asRecord(costRecord.by_model) as CompatCostSummary['by_model'] ?? fallback.cost.by_model,
+      }
+      : fallback.cost
+
+    return {
+      version: 1,
+      configToml: typeof record.configToml === 'string' ? record.configToml : fallback.configToml,
+      cronJobs,
+      memoryEntries,
+      cost,
+    }
+  } catch {
+    return defaultCompatState()
+  }
+}
+
+async function saveCompatState(state: CompatState): Promise<void> {
+  await mkdir(dirname(compatStatePath), { recursive: true })
+  await writeFile(compatStatePath, JSON.stringify(state, null, 2), 'utf8')
 }
 
 async function isPortReachable(port: number): Promise<boolean> {
@@ -182,6 +341,88 @@ async function readPiCompatStatus(runtime: PiRpcProcess, pairing: PiPairingGuard
   }
 }
 
+function getUptimeSeconds(startedAtIso: string | null): number {
+  if (!startedAtIso) return 0
+  const ms = Date.parse(startedAtIso)
+  if (Number.isNaN(ms)) return 0
+  return Math.max(0, Math.floor((Date.now() - ms) / 1000))
+}
+
+function buildCompatHealthSnapshot(status: PiCompatStatus) {
+  const nowIso = new Date().toISOString()
+  return {
+    pid: status.runtime.pid ?? 0,
+    updated_at: nowIso,
+    uptime_seconds: getUptimeSeconds(status.runtime.startedAtIso),
+    components: {
+      runtime: {
+        status: status.runtime.status === 'running' ? 'ok' : status.runtime.status,
+        updated_at: nowIso,
+        last_ok: status.runtime.status === 'running' ? nowIso : null,
+        last_error: status.runtime.lastError,
+        restart_count: status.runtime.restartCount,
+      },
+      gateway: {
+        status: status.gateway.reachable ? 'ok' : 'degraded',
+        updated_at: nowIso,
+        last_ok: status.gateway.reachable ? nowIso : null,
+        last_error: status.gateway.reachable ? null : 'Gateway not reachable',
+        restart_count: 0,
+      },
+      auth: {
+        status: status.auth.paired ? 'ok' : 'warn',
+        updated_at: nowIso,
+        last_ok: status.auth.paired ? nowIso : null,
+        last_error: status.auth.paired ? null : 'Not paired',
+        restart_count: 0,
+      },
+    },
+  }
+}
+
+function buildCompatStatusPayload(status: PiCompatStatus) {
+  const health = buildCompatHealthSnapshot(status)
+  return {
+    provider: 'pi_agent_rust',
+    model: compatModelId,
+    temperature: 0.2,
+    uptime_seconds: health.uptime_seconds,
+    gateway_port: status.gateway.port,
+    locale: 'en',
+    memory_backend: 'sqlite',
+    paired: status.auth.paired,
+    channels: {
+      webhook: true,
+      mobile: true,
+      rpc: true,
+    },
+    health,
+  }
+}
+
+function resultAsText(result: unknown): string {
+  if (typeof result === 'string') {
+    return result
+  }
+  const record = asRecord(result)
+  if (!record) return JSON.stringify(result)
+  const candidateKeys = ['message', 'output', 'text', 'response', 'content']
+  for (const key of candidateKeys) {
+    const candidate = record[key]
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate
+    }
+  }
+  return JSON.stringify(result)
+}
+
+function estimateTokens(text: string): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  const words = trimmed.split(/\s+/u).length
+  return Math.max(1, Math.round(words * 1.3))
+}
+
 export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
   const runtime = new PiRpcProcess()
   const pairing = new PiPairingGuard({
@@ -190,6 +431,43 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
   const connections = new Set<ServerResponse>()
   const eventUnsubscribeByConnection = new Map<ServerResponse, () => void>()
   const closeByConnection = new Map<ServerResponse, () => void>()
+  let compatStatePromise: Promise<CompatState> | null = null
+
+  const readCompatState = async (): Promise<CompatState> => {
+    if (!compatStatePromise) {
+      compatStatePromise = loadCompatState().then((state) => state)
+    }
+    return compatStatePromise
+  }
+
+  const mutateCompatState = async (mutator: (state: CompatState) => void): Promise<CompatState> => {
+    const state = await readCompatState()
+    mutator(state)
+    await saveCompatState(state)
+    return state
+  }
+
+  const recordPromptCost = async (input: string, output: string): Promise<void> => {
+    const tokenCount = estimateTokens(input) + estimateTokens(output)
+    const costUsd = tokenCount * 0.0000018
+    await mutateCompatState((state) => {
+      const current = state.cost.by_model[compatModelId] ?? {
+        model: compatModelId,
+        cost_usd: 0,
+        total_tokens: 0,
+        request_count: 0,
+      }
+      current.total_tokens += tokenCount
+      current.request_count += 1
+      current.cost_usd += costUsd
+      state.cost.by_model[compatModelId] = current
+      state.cost.total_tokens += tokenCount
+      state.cost.request_count += 1
+      state.cost.session_cost_usd += costUsd
+      state.cost.daily_cost_usd += costUsd
+      state.cost.monthly_cost_usd += costUsd
+    })
+  }
 
   const callPiCommand = async (command: string, params?: Record<string, unknown>) => {
     const payload = params ?? {}
@@ -251,7 +529,13 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       return
     }
 
-    if (req.method === 'POST' && url.pathname === '/pi-api/pair') {
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      const status = await readPiCompatStatus(runtime, pairing)
+      setJson(res, 200, { health: buildCompatHealthSnapshot(status) })
+      return
+    }
+
+    if (req.method === 'POST' && (url.pathname === '/pi-api/pair' || url.pathname === '/pair')) {
       let body: unknown
       try {
         body = await readJsonBody(req)
@@ -295,6 +579,11 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
         return
       }
 
+      if (url.pathname === '/pair') {
+        setJson(res, 200, { token: pairResult.token })
+        return
+      }
+
       setJson(res, 200, {
         data: {
           token: pairResult.token,
@@ -311,12 +600,13 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       return
     }
 
-    if (req.method === 'GET' && url.pathname === '/pi-api/events') {
+    if (req.method === 'GET' && (url.pathname === '/pi-api/events' || url.pathname === '/api/events')) {
       const auth = await requireAuth(req, url)
       if (!auth.ok) {
         setJson(res, auth.statusCode, { error: auth.error })
         return
       }
+      const zeroApiShape = url.pathname === '/api/events'
 
       res.statusCode = 200
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
@@ -329,6 +619,14 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       const sendStatus = async () => {
         if (res.writableEnded || res.destroyed) return
         const payload = await readPiCompatStatus(runtime, pairing)
+        if (zeroApiShape) {
+          res.write(`data: ${JSON.stringify({
+            type: 'status',
+            timestamp: new Date().toISOString(),
+            data: buildCompatStatusPayload(payload),
+          })}\n\n`)
+          return
+        }
         res.write(`data: ${JSON.stringify({ method: 'pi/status', params: payload, atIso: new Date().toISOString() })}\n\n`)
       }
 
@@ -336,9 +634,9 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
         await runtime.ensureStarted()
       } catch (error) {
         res.write(`data: ${JSON.stringify({
-          method: 'pi/error',
-          params: { message: getErrorMessage(error, 'Failed to start Pi runtime') },
-          atIso: new Date().toISOString(),
+          type: zeroApiShape ? 'error' : 'pi/error',
+          message: getErrorMessage(error, 'Failed to start Pi runtime'),
+          timestamp: new Date().toISOString(),
         })}\n\n`)
         res.end()
         return
@@ -347,6 +645,22 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
 
       const unsubscribe = runtime.onNotification((notification: PiRuntimeNotification) => {
         if (res.writableEnded || res.destroyed) return
+        if (zeroApiShape) {
+          const record = asRecord(notification.params)
+          const type = notification.method === 'pi/error'
+            ? 'error'
+            : notification.method === 'pi/status'
+              ? 'status'
+              : (typeof record?.eventType === 'string' ? record.eventType : 'event')
+          const payload = {
+            type,
+            timestamp: notification.atIso,
+            data: record?.data ?? notification.params,
+            message: typeof record?.message === 'string' ? record.message : undefined,
+          }
+          res.write(`data: ${JSON.stringify(payload)}\n\n`)
+          return
+        }
         res.write(`data: ${JSON.stringify(notification)}\n\n`)
       })
       eventUnsubscribeByConnection.set(res, unsubscribe)
@@ -381,14 +695,272 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
       '/pi-api/session/name',
       '/pi-api/rpc',
       '/pi-api/webhook',
+      '/api/status',
+      '/api/config',
+      '/api/tools',
+      '/api/cron',
+      '/api/integrations',
+      '/api/doctor',
+      '/api/memory',
+      '/api/cost',
+      '/api/cli-tools',
+      '/api/events',
     ])
 
-    if (needsAuthPaths.has(url.pathname)) {
+    const needsAuth =
+      needsAuthPaths.has(url.pathname)
+      || url.pathname.startsWith('/api/cron/')
+      || url.pathname.startsWith('/api/memory/')
+
+    if (needsAuth) {
       const auth = await requireAuth(req, url)
       if (!auth.ok) {
         setJson(res, auth.statusCode, { error: auth.error })
         return
       }
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/status') {
+      const status = await readPiCompatStatus(runtime, pairing)
+      setJson(res, 200, buildCompatStatusPayload(status))
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/config') {
+      const state = await readCompatState()
+      setJson(res, 200, {
+        format: 'toml',
+        content: state.configToml,
+      })
+      return
+    }
+
+    if (req.method === 'PUT' && url.pathname === '/api/config') {
+      const content = await readTextBody(req)
+      await mutateCompatState((state) => {
+        state.configToml = content.trim().length > 0 ? content : defaultCompatState().configToml
+      })
+      setJson(res, 200, { status: 'ok' })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/tools') {
+      setJson(res, 200, {
+        tools: [
+          {
+            name: 'prompt',
+            description: 'Send a prompt to pi_agent_rust runtime',
+            parameters: {
+              type: 'object',
+              properties: {
+                message: { type: 'string' },
+              },
+              required: ['message'],
+            },
+          },
+          {
+            name: 'abort',
+            description: 'Abort active runtime generation',
+            parameters: {
+              type: 'object',
+              properties: {},
+            },
+          },
+          {
+            name: 'set_model',
+            description: 'Switch runtime provider/model',
+            parameters: {
+              type: 'object',
+              properties: {
+                provider: { type: 'string' },
+                modelId: { type: 'string' },
+              },
+              required: ['provider', 'modelId'],
+            },
+          },
+        ],
+      })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/cron') {
+      const state = await readCompatState()
+      setJson(res, 200, { jobs: state.cronJobs })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/cron') {
+      const body = await readJsonBody(req)
+      const payload = asRecord(body)
+      const schedule = typeof payload?.schedule === 'string' ? payload.schedule.trim() : ''
+      const command = typeof payload?.command === 'string' ? payload.command.trim() : ''
+      const name = typeof payload?.name === 'string' && payload.name.trim().length > 0
+        ? payload.name.trim()
+        : null
+      if (!schedule || !command) {
+        setJson(res, 400, { error: 'schedule and command are required' })
+        return
+      }
+      const job: CompatCronJob = {
+        id: randomUUID(),
+        name,
+        command,
+        schedule,
+        next_run: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        last_run: null,
+        last_status: null,
+        enabled: payload?.enabled !== false,
+      }
+      await mutateCompatState((state) => {
+        state.cronJobs.push(job)
+      })
+      setJson(res, 200, { status: 'ok', job })
+      return
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/cron/')) {
+      const id = decodeURIComponent(url.pathname.replace('/api/cron/', '').trim())
+      await mutateCompatState((state) => {
+        state.cronJobs = state.cronJobs.filter((job) => job.id !== id)
+      })
+      res.statusCode = 204
+      res.end()
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/integrations') {
+      setJson(res, 200, {
+        integrations: [
+          {
+            name: 'mobile',
+            description: 'Android WebView embedding',
+            category: 'platform',
+            status: 'Active',
+          },
+          {
+            name: 'gateway',
+            description: 'ZeroClaw-compatible gateway and pairing',
+            category: 'runtime',
+            status: 'Active',
+          },
+          {
+            name: 'webhook',
+            description: 'Webhook compatibility endpoint',
+            category: 'channel',
+            status: 'Available',
+          },
+        ],
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/doctor') {
+      const status = await readPiCompatStatus(runtime, pairing)
+      setJson(res, 200, {
+        results: [
+          {
+            severity: status.piCoreInstalled ? 'ok' : 'error',
+            category: 'runtime',
+            message: status.piCoreInstalled ? 'pi core detected' : 'pi core missing',
+          },
+          {
+            severity: status.zeroClawCompatInstalled ? 'ok' : 'warn',
+            category: 'compat',
+            message: status.zeroClawCompatInstalled ? 'zeroclaw detected' : 'zeroclaw binary missing',
+          },
+          {
+            severity: status.gateway.reachable ? 'ok' : 'warn',
+            category: 'gateway',
+            message: status.gateway.reachable ? 'gateway is reachable' : 'gateway is unreachable',
+          },
+          {
+            severity: status.auth.paired ? 'ok' : 'warn',
+            category: 'auth',
+            message: status.auth.paired ? 'device is paired' : 'pairing still required',
+          },
+        ],
+      })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/memory') {
+      const query = (url.searchParams.get('query') ?? '').trim().toLowerCase()
+      const category = (url.searchParams.get('category') ?? '').trim().toLowerCase()
+      const state = await readCompatState()
+      const entries = state.memoryEntries.filter((entry) => {
+        if (category.length > 0 && entry.category.toLowerCase() !== category) {
+          return false
+        }
+        if (query.length === 0) return true
+        return `${entry.key}\n${entry.content}`.toLowerCase().includes(query)
+      })
+      setJson(res, 200, { entries })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/memory') {
+      const body = await readJsonBody(req)
+      const payload = asRecord(body)
+      const key = typeof payload?.key === 'string' ? payload.key.trim() : ''
+      const content = typeof payload?.content === 'string' ? payload.content.trim() : ''
+      const category = typeof payload?.category === 'string' && payload.category.trim().length > 0
+        ? payload.category.trim()
+        : 'general'
+      if (!key || !content) {
+        setJson(res, 400, { error: 'key and content are required' })
+        return
+      }
+      await mutateCompatState((state) => {
+        const nextEntry: CompatMemoryEntry = {
+          id: randomUUID(),
+          key,
+          content,
+          category,
+          timestamp: new Date().toISOString(),
+          session_id: null,
+          score: null,
+        }
+        const index = state.memoryEntries.findIndex((entry) => entry.key === key)
+        if (index >= 0) {
+          state.memoryEntries.splice(index, 1, nextEntry)
+        } else {
+          state.memoryEntries.unshift(nextEntry)
+        }
+      })
+      setJson(res, 200, { status: 'ok' })
+      return
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/memory/')) {
+      const key = decodeURIComponent(url.pathname.replace('/api/memory/', '').trim())
+      await mutateCompatState((state) => {
+        state.memoryEntries = state.memoryEntries.filter((entry) => entry.key !== key)
+      })
+      res.statusCode = 204
+      res.end()
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/cost') {
+      const state = await readCompatState()
+      setJson(res, 200, { cost: state.cost })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/cli-tools') {
+      const [piPath, zeroclawPath, codexPath] = await Promise.all([
+        commandOutput('command -v pi'),
+        commandOutput('command -v zeroclaw'),
+        commandOutput('command -v codex'),
+      ])
+      setJson(res, 200, {
+        cli_tools: [
+          { name: 'pi', path: piPath || '(missing)', version: null, category: 'runtime' },
+          { name: 'zeroclaw', path: zeroclawPath || '(missing)', version: null, category: 'compat' },
+          { name: 'codex', path: codexPath || '(missing)', version: null, category: 'assistant' },
+        ],
+      })
+      return
     }
 
     if (req.method === 'GET' && url.pathname === '/pi-api/state') {
@@ -459,6 +1031,7 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
           ...(images ? { images } : {}),
           ...(streamingBehavior ? { streamingBehavior } : {}),
         })
+        await recordPromptCost(message, resultAsText(result))
         setJson(res, 200, { result })
       } catch (error) {
         setJson(res, 502, { error: getErrorMessage(error, 'Failed to send prompt to Pi runtime') })
@@ -533,6 +1106,7 @@ export function createPiCompatBridgeMiddleware(): PiCompatBridgeMiddleware {
           return
         }
         const result = await callPiCommand('prompt', { message })
+        await recordPromptCost(message, resultAsText(result))
         setJson(res, 200, { status: 'ok', result })
       } catch (error) {
         setJson(res, 502, { error: getErrorMessage(error, 'Pi webhook compatibility call failed') })

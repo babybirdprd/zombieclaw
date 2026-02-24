@@ -39,9 +39,11 @@ npm run build:cli
 echo "Copying build artifacts to Android assets..."
 rm -rf "$ASSETS_DIR"
 mkdir -p "$ASSETS_DIR/dist"
+mkdir -p "$ASSETS_DIR/dist-zeroclaw"
 mkdir -p "$ASSETS_DIR/dist-cli"
 
 cp -r "$PROJECT_ROOT/dist/"* "$ASSETS_DIR/dist/"
+cp -r "$PROJECT_ROOT/dist-zeroclaw/"* "$ASSETS_DIR/dist-zeroclaw/"
 cp -r "$PROJECT_ROOT/dist-cli/"* "$ASSETS_DIR/dist-cli/"
 cp "$PROJECT_ROOT/package.json" "$ASSETS_DIR/package.json"
 

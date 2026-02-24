@@ -5,7 +5,7 @@ const EmptyRouteView = {
 }
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/',
@@ -15,19 +15,6 @@ const router = createRouter({
     {
       path: '/thread/:threadId',
       name: 'thread',
-      component: EmptyRouteView,
-    },
-    {
-      path: '/apps',
-      redirect: '/apps/codex',
-    },
-    {
-      path: '/apps/codex',
-      redirect: { name: 'home' },
-    },
-    {
-      path: '/apps/pi',
-      name: 'app-pi',
       component: EmptyRouteView,
     },
     {

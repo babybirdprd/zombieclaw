@@ -270,12 +270,6 @@ class MainActivity : AppCompatActivity() {
             if (!gatewayOk) {
                 Log.w(TAG, "Pi compatibility gateway failed to start")
             }
-
-            updateStatus("Starting Pi Control UI…")
-            val controlUiOk = serverManager.startPiControlUiServer()
-            if (!controlUiOk) {
-                Log.w(TAG, "Pi Control UI failed to start")
-            }
         }
 
         // Step 8: Start web server

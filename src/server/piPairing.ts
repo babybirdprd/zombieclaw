@@ -25,7 +25,7 @@ export type PairingStatus = {
 }
 
 function defaultStorePath(): string {
-  return join(homedir(), '.anyclaw', 'pi-bridge-auth.json')
+  return join(homedir(), '.zombieclaw', 'pi-bridge-auth.json')
 }
 
 function hashToken(token: string): string {
